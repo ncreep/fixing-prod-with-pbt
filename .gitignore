@@ -1,0 +1,9 @@
+.tags
+.tags1
+**/target/**
+**/.bsp/**
+**/.idea/**
+**/.scala-build/**
+**/.vscode
+*.bkp
+*.dtmp

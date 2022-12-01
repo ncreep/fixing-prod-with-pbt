@@ -1,0 +1,1968 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Fixing-up Production with Property-based Testing</title>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+<link rel='stylesheet' type='text/css' href='style.css' />
+</head>
+<body>
+<textarea id="source">
+
+class: center, middle, transition, intro
+
+# Fixing-up Production with<br/>Property-based Testing
+
+.horizontalCentered.caption[Daniel Beskin]
+
+???
+
+- Hi, my name is Daniel, and thanks for coming
+- Let's get to it
+
+---
+
+## The Promise of Property-based Testing
+
+- Write one property
+
+- Get hundreds of tests for free
+
+???
+
+- I'm sure that many of you heard of property-based testing
+- It usually goes something like this
+- You define some property that should hold for any input to your code
+- And then you get hundreds of tests for free
+- Much better than some measly unit-test
+- It all sounds very promising 
+- Then they show you some examples
+
+--
+-  
+```
+forAll: (a: Int, b: Int, c: Int) => 
+      (a + b) + c == a + (b + c)
+```
+
+???
+- Validating the associativity of integers
+
+--
+-  
+```
+forAll: (ls: List[String]) => 
+      ls.reverse.reverse == l 
+```
+
+???
+- Check your brand new implementation of `List.reverse`
+
+--
+
+- Now what?
+
+???
+- And then you're left on your own to figure out how to apply this to your code
+- I really like the **idea** of property-based testing
+- But how often am I going to implement `reverse` or a new number system?
+- Despite my wishes to apply this approach to my own code, I'm having a difficult time figuring what properties to define
+- There are of course talks tackling these very issues
+- But I want to share with you a slightly different approach
+
+---
+
+## Property-based Testing for "Real"
+
+- A case study of a production bug
+
+???
+- We are going to look at a case study of a tricky production bug
+
+--
+- Property-based testing as a debug tool
+
+???
+- And how we managed to debug and resolve it with property-based testing as an aid
+
+--
+  
+  - Define (simple) properties
+
+  - Debug with random data
+
+  - Minimize with shrinking
+  
+???
+- With the pillars of property-based testing helping us out
+- We will define some very simple, but useful properties for our system
+- Reproduce the bug by generating lots of random data
+- And then use one of the neat features of property testing: shrinking
+- To create minimal examples of the bug which are easy to understand and fix
+
+---
+
+class: middle, transition
+
+> With the clock ticking, she must navigate her way through a web of deception and corporate espionage, all while trying to survive the endless onslaught of buzzwords and tech jargon.
+
+.footnote[GPT-3 on "Startups: Buzzwords Will Be the Death of Me"]
+
+???
+- But first we'll need a bit of background about the system we are going to debug
+
+---
+
+.basedOn[Inspired by true events...]
+
+???
+- I'll start out by saying that this case study is inspired by an actual incident in a production system I was working on
+- And I really did use property-based testing for it
+- But
+
+---
+
+
+.basedOn[
+Any resemblance  
+to real production systems  
+or actual facts  
+is purely  
+coincidental
+]
+
+???
+- The example code I'm going to show you is so obfuscated
+- That even people who are working on this code are not likely to see any relation to the original issue
+- With this disclaimer out of the way
+
+---
+layout: true
+## A Startup
+
+---
+
+???
+- Imagine we want to create a brand new startup
+--
+
+- Maximize buzzwords on the landing page
+
+???
+- The obvious way to maximize our chances of success is to maximize the number of buzzwords that you can use on your landing page
+
+--
+  - Blockchain
+  - Deep learning
+  - AI
+  - Cryptocurrency
+  - ...
+  
+???
+- So things like crypto and deep learning
+--
+
+- Are all words we want to use
+
+???
+- Are all words we want to use
+- With this in mind we can build our start up
+
+---
+
+- Deep insight:
+
+???
+- But first we need a deep insight
+--
+
+  - People don't like ads
+  
+???
+- People don't like ads
+- And
+--
+  
+  - Lots of wasted compute on mobile devices
+
+???
+- As people have more and more powerful mobile devices
+- Lots of compute is being wasted on them idling
+--
+
+- Idea:
+
+???
+- So the idea is
+--
+
+  - Sell off mobile compute to the highest bidder
+  
+???
+- Start selling people's mobile compute power to the highest bidder
+
+--
+
+  - Maximize buzzwords with diverse compute jobs
+  
+???
+- By supporting diverse kinds of compute jobs
+- Like mining crypto or training deep learning 
+- We'll be able to maximize the number of buzzwords we can legitimately use
+--
+
+  - No ads
+
+???
+- In exchange, we spare our users from ever seeing ads
+- With this brilliant idea we can start building our system
+- So here's an overview of the system
+
+---
+layout: true
+
+## The Flow
+
+---
+
+.fullFlow[![](system flow-full flow.drawio.svg)]
+
+???
+
+- This is the high-level overview of the flow we're interested in
+- Of course we can't present anything without some buzz words
+
+---
+
+.fullFlow[![](system flow-full flow with buzz.drawio.svg)]
+
+???
+- We have a bunch of job providers
+- That send us requests for various jobs
+- Here we can see jobs for training neural networks, mining bitcoin
+- And, because we want to give back to society, folding proteins
+- This all goes through our system
+- Since we are running arbitrary jobs on our client devices
+- We take security very seriously
+- So we have a security manager
+- Which, after clearing only the secure jobs sends them to a queue
+- Afterwards the jobs are dispatched to client devices
+- "Edge computing" as they might call it these days
+- The focus of this talk, the bug, is going to be the security sub-system
+
+---
+layout: true
+## The Security Sub-system
+---
+
+.securityFlow[![](system flow-security.drawio.svg)]
+
+???
+- This is the security manager
+- It's one of the oldest pieces of code in the codebase
+- So it accumulated some weirdness over time
+- The biggest one is the inputs
+- Due to various performance concerns we get it in batches by provider
+- But also a number of provider batches are grouped into a bigger batch
+- So a batch of batches here
+- Too bad we didn't know anything about streaming at the time
+- Next we rank the jobs by their predicted security score
+- This is also batched
+- And lets us quickly decide which jobs are definitely safe
+- But, then, for the jobs that are in the gray area 
+- We do a deeper scan with a proprietary security-tracer
+- Which goes deep into the jobs to uncover issues with them
+- Rejecting any unsafe jobs
+- As this might be dangerous for the server running it
+- We wrap it all up in a security sandbox
+- This is the most fiddly part of the system
+- As it is a heavy resource that requires careful management
+
+---
+.securityFlow[![](system flow-security with buzz.drawio.svg)]
+
+???
+- Of course, we can't do anything without some buzz words
+- We don't just rank, we use data-science for it
+- And the tracer is obviously powered by AI
+
+---
+layout: false
+class: middle, transition
+
+> As corruption spreads... a group of software developers realize they must use their skills in unit-testing to uncover the truth...  
+> But they soon realize that the corruption is far more complex than it first seemed...
+
+.footnote[GPT-3 on "Corruption, Bugs and Unit-Testing"]
+
+???
+- Now that you're familiar with the system
+- We are ready to dive into our production bug
+
+---
+layout: false
+
+## The Bug
+
+???
+- So one day we get a bug report
+--
+
+- After updating from Java 6 to 7
+
+???
+- Since recently updating to Java 7
+- About time, we seem to be living in the past
+
+--
+
+- Occasional `SecuritySandboxIsCorrupt` exceptions
+
+???
+- We started getting occasional exceptions about the security sandbox getting corrupt
+
+--
+
+- No other clues
+
+???
+- And that's it, no other clues
+- So we scratch our head thinking about this
+
+---
+## `println` Debugging
+
+???
+- Of course, our first line of defense is to do some `println` debugging
+- So we look for the code that originates the execption 
+
+--
+
+```
+class SecurityManager:
+  
+  def secureRunJobs(jobs: List[JobBatch]): Task[Unit]
+```
+
+???
+- That's the signature of the security-manager that we saw in the previous slides
+- It takes a batch of batches and does its thing
+- We can start by printing out the inputs that trigger the exception
+
+--
+
+```
+List(
+  JobBatch(
+    JobProvider("p1"),
+    jobs = List(
+      MineCrypto(CPU(625), RAM(666)),
+      FoldProteins(CPU(511), RAM(591)))),
+  JobBatch(
+    JobProvider("p2"),
+    jobs = List(
+      MineCrypto(CPU(686), RAM(390)),
+      TrainDeepLearning(CPU(359), RAM(37)))))
+```
+
+???
+- That's what we got from the production logs
+- It's a couple of small batches of jobs
+- Now that we have a faulty input
+- We can create a unit-test that reproduces the bug
+
+---
+layout: true
+
+## Unit tests
+
+---
+```
+"Examples from production" should:
+  "reproduce the bug" in:
+    val batches = ???
+
+    val isSandboxCorrupt = submitBatches(batches)
+
+    assert(isSandboxCorrupt)
+```
+
+???
+- To reproduce the bug in a test
+- We take the production output, here
+- And submit it to our security manager
+- Then check that the sandbox was indeed corrupted by this input
+- Run it
+
+--
+<pre class="remark-code">
+[info]<span style="color: green"> Examples from production</span>
+[info]<span style="color: crimson"> - should reproduce the bug *** FAILED ***</span>
+[info]<span style="color: crimson">   isSandboxCorrupt was false</span>
+</pre>
+
+???
+- No such luck
+- Although this input was corrupting in production
+- It doesn't reproduce in a test
+- Thinking about it some more
+- We conclude that it must be a stateful problem
+- The state of the sandbox is changing over time
+- And some sequence of steps corrupts it
+- At this point we can only pray that it's not a multi-threading issue
+- "Luckily" the security-manager is old and very sequential
+- We can hope that the bug is also sequential
+- So let's try to reproduce these steps by taking a sequence of such batches
+
+---
+class: tinyExampleFromProduction
+```
+List(
+  List(
+    JobBatch(
+      JobProvider("p1"),
+      List(
+        FoldProteins(CPU(753), RAM(903)), TrainDeepLearning(CPU(651), RAM(332)), MineCrypto(CPU(772), RAM(346))
+      )
+    ),
+    JobBatch(
+      JobProvider("p1"),
+      List(
+        FoldProteins(CPU(218), RAM(575)), MineCrypto(CPU(368), RAM(869)), FoldProteins(CPU(634), RAM(592)),
+        FoldProteins(CPU(145), RAM(642)), MineCrypto(CPU(437), RAM(144))
+      )
+    ),
+    JobBatch(JobProvider("p3"),
+      List(FoldProteins(CPU(774), RAM(387))))),
+  List(
+    JobBatch(
+      JobProvider("p2"),
+      List(
+        MineCrypto(CPU(686), RAM(390)), TrainDeepLearning(CPU(359), RAM(37)), FoldProteins(CPU(298), RAM(880))
+      )
+    ),
+    JobBatch(
+      JobProvider("p2"),
+      List(
+        TrainDeepLearning(CPU(253), RAM(351)), TrainDeepLearning(CPU(244), RAM(669)), TrainDeepLearning(CPU(113), RAM(74)),
+        FoldProteins(CPU(973), RAM(464)),
+      )
+    ),
+    JobBatch(JobProvider("p3"), List(MineCrypto(CPU(894), RAM(127)))),
+    JobBatch(
+      JobProvider("p2"),
+      List(
+        FoldProteins(CPU(688), RAM(339)), MineCrypto(CPU(445), RAM(840)), FoldProteins(CPU(799), RAM(481)),
+        MineCrypto(CPU(49), RAM(301)), FoldProteins(CPU(899), RAM(124)), MineCrypto(CPU(882), RAM(541)),
+        TrainDeepLearning(CPU(579), RAM(721))
+      )
+    ),
+    JobBatch(
+      JobProvider("p2"),
+      List(
+        MineCrypto(CPU(845), RAM(367)), TrainDeepLearning(CPU(232), RAM(275)), MineCrypto(CPU(639), RAM(919)),
+        TrainDeepLearning(CPU(135), RAM(337))))))
+```
+
+???
+- Here's one such sequence
+- It's quite long
+- But at the end production was throwing an exception
+
+---
+
+```
+"Examples from production" should:
+  "reproduce the bug" in:
+    val batches: List[List[JobBatch]] = ???
+
+    val isSandboxCorrupt = submitBatches(batches)
+
+    assert(isSandboxCorrupt)
+```
+
+???
+- We can now rewrite our test so that it submits multiple inputs
+- Notice the list of lists here
+- Each item in the list is a single input
+- We spawn our security-manager
+- And then submit a number of batch-of-batches to it
+- Then see whether the sandbox is corrupted at the end
+- Run it
+
+--
+
+<pre class="remark-code">
+[info]<span style="color: green"> Examples from production</span>
+[info]<span style="color: crimson"> - should reproduce the bug *** FAILED ***</span>
+[info]<span style="color: crimson">   isSandboxCorrupt was false</span>
+</pre>
+
+???
+- Nope, still doesn't reproduce
+- If the problem is stateful, who knows where the sequence should start?
+- We can continue randomly picking out logs in production
+- But it's tedious
+- And it could very well be that the starting point is days away from the exception throwing
+- That's the nature of stateful issues
+- The cause and effect can be quite far apart
+- **"Spooky action at a distance"**
+- But why should **we** randomly pick out logs?
+- Why not generate them and test them automatically?
+
+---
+
+layout: false
+class: middle, transition
+
+> As they delve deeper into the case, they uncover a web of deceit and discover how a seemingly innocuous property-based test may be the key to unlocking the mystery.
+
+.footnote[GPT-3 on "Lied, Damned Lies, and Property-Based Testing"]
+
+???
+- So now that `println` debugging and unit testing failed us
+- We are ready to tackle this problem with property-based testing
+
+---
+layout: true
+## Property-based Testing, Finally
+---
+
+???
+- Finally, we are getting to an actual property-based test
+- Seeing how magical property-based tests should be, we should catch our bug in no time
+- We can start by defining our very own property for the system
+
+--
+
+```
+"The security manager" should:
+  "not corrupt the sandbox" in:
+    forAll: (batches: List[List[JobBatch]]) =>
+      val isSandboxCorrupt = submitBatches(batches)
+
+      assert(!isSandboxCorrupt)
+```
+
+???
+- This is very similar to the unit test we had before
+- But instead of having a specific list of batches
+- We are now running the test `forAll` possible sequences of batches
+- And for all such sequences the sandbox should **never** end up being corrupt
+- Since, like in the last unit-test we are generating a list of lists here
+- We have a chance of driving the system into the invalid state we are looking for
+- Let's run it
+
+--
+<pre class="remark-code">
+[info]<span style="color: green"> The security manager</span>
+[info]<span style="color: green"> - should not corrupt the sandbox</span>
+[info]<span style="color: navy"> Run completed in 2 seconds, 771 milliseconds.</span>
+[info]<span style="color: green"> All tests passed.</span>
+</pre>
+
+???
+- It's green!
+- Wait a moment, that's not what we wanted
+- The test passing means that the property we defined holds for the system
+- But we know that this shouldn't be true, we are looking for an existing bug
+- So the property test didn't manage to reveal it
+- Not so magical after all...
+- But we won't give up
+- First order of business, we see that the test is running fairly quickly
+- That means that we probably didn't get many samples in the test
+- Since we are looking for a tricky stateful bug, we should fire many samples at it
+- So we'll tweak the number of samples
+
+---
+
+```
+val config =
+  PropertyCheckConfiguration(minSuccessful = 2000)
+```
+
+???
+- The defaults for these things are usually quite low
+- So we specify that we want at least 2000 attempts
+- Let's run it again
+
+--
+<pre class="remark-code">
+[info]<span style="color: green"> The security manager</span>
+[info]<span style="color: green"> - should not corrupt the sandbox</span>
+[info]<span style="color: navy"> Run completed in 2 minutes, 28 seconds.</span>
+[info]<span style="color: green"> All tests passed.</span>
+</pre>
+
+???
+- On the bright side, it's running for more time
+- But it still passes, we didn't reveal the bug in our system
+- At this point we might give up on property-based testing and move on
+- But this is not this kind of talk
+- Instead let's think about it some more
+
+---
+layout: true
+## Mocking
+
+---
+
+```scala
+class SecurityManager(
+  securityRanker: SecurityRanker,
+  sandboxOptimizer: SecuritySandboxOptimizer,
+  securityTracer: SecurityTracer,
+  jobQueue: JobQueue)
+```
+
+???
+- This is the component that we are testing, `SecurityManager`
+- With all of its dependencies
+- It would make sense for the bug to be some bad interaction between theses components
+- The problem with randomly generated inputs is that we don't know what bits of the state space we covered
+- The more interactions we have the larger the space of different outcomes
+- So it's quite likely that we never hit the bug because the state space is too large
+- We need to find some way to reduce it while still keeping the bug in place
+- What we'll do is try to mock out parts of the system in a way that's realistic enough, but with simpler behavior
+- In a way, we are creating a partial model of the real system with mocks
+- This is where things become more speculative
+- We need to choose which components to mock, and which to keep
+- If we mock too much, the bug might disappear
+- By making some educated guesses we might find the right components to mock
+- Let's start from the end
+- The `JobQueue` doesn't interact with the sandbox so we can ignore it for now
+- The `SecurityTracer` is an external component, modeling its behavior would be complicated
+- For now, let's assume we can trust it as is
+- The `SecuritySandboxOptimizer` is doing something quite tricky, trying to reduce churn when using the sandbox
+- It's a good candidate for mocking
+
+--
+
+```
+trait SecuritySandboxOptimizer:
+  def addPrePost: 
+    List[RankedBatch] => List[PrePostJob[RankedBatch]]
+```
+
+???
+- But it's essentially a complicated pure function
+- Itself a good candidate for property-based testing
+- So unless we reproduce its logic as a mock
+- The mock is likely to end up either trivial, or wrong, and introducing its own bugs
+- That leaves us with the `SecurityRanker`
+
+--
+
+```
+trait SecurityRanker:
+  def predictSecurityLevel: JobBatch => UIO[RankedBatch]
+```
+
+???
+- Since we eliminated the other candidates for now
+- We can choose to mock this out
+- It's a good candidate for mocking, as its behavior is pretty-much a black-box for us
+- And we can come up with a nice model of how it **should** work
+- We'll follow the types to guide our mock's behavior
+
+---
+```
+trait SecurityRanker:
+  def predictSecurityLevel: JobBatch => UIO[RankedBatch]
+```
+
+```
+case class RankedBatch(
+  provider: JobProvider,
+  jobs: Option[List[RankedJob]])
+```
+
+???
+- We can see that the output has some nested structure 
+- For each batch we can perform some side-effect
+- But we can't have errors, as the output is unexceptional IO
+- Then we might return an empty `Option`
+- Or we can return a `List`
+- Which in turn can be empty, or might have some results
+- So we have 3 major behaviors in this code
+
+--
+
+```
+enum Behavior:
+  case EmptyOption
+  case EmptyList
+  case AssignRandomRanking
+```
+
+???
+- Either an empty `Option` for a result
+- Or an empty `List`
+- In the third case, we need to assign some security rankings
+- We'll do it by randomizing some security ratings
+- Hopefully this model is rich enough to expose the bug
+- But with a sufficiently smaller state space than the original code
+- Which would lead to a higher chance to reveal the bug
+- So in the mock we'll randomly generate some behaviors and return the appropriate results
+
+---
+
+layout: true
+
+## A Property Test with Mocking
+---
+
+```
+"The security manager" should:
+  "not corrupt the sandbox" in:
+    forAll:
+      (actions: List[List[(JobBatch, Behavior)]]) =>
+      
+        val isSandboxCorrupt = submitBatches(actions)
+
+        assert(!isSandboxCorrupt)
+```
+
+???
+- Here's our new property
+- It's very similar to previous one
+- But now for every random `JobBatch` that we get we also get a random `Behavior`
+- So when the batch arrives to the `SecurityRanker` it will respond with that behavior
+- We can run it now
+
+--
+<pre class="remark-code">
+[info]<span style="color: green"> The security manager</span>
+[info]<span style="color: green"> - should not corrupt the sandbox</span>
+[info]<span style="color: green"> All tests passed.</span>
+</pre>
+
+???
+- Failed, again...
+- The bug wasn't revealed by this property
+- We really, really tried
+- It seems that property-based testing is really not all that great
+
+---
+
+layout: false
+class: middle, transition
+
+> With the help of a mysterious and somewhat shady figure, they embark on a journey to uncover the dark secrets of the art of test generation and solve the riddle of their software's many issues.
+
+.footnote[GPT-3 on "The Fine Art of Property-based Test Generation"]
+
+???
+- It's time to step back
+- Property-based testing is actually quite a rich topic
+- With lots of nuance and fine details
+
+
+---
+layout: true
+
+## The Fine Art of Data Generation
+---
+
+???
+- We were hoping to just run it magically and get it working
+- But maybe we should invest some more into the actual process
+- Successful property-based testing hinges on generating "good" data
+- What "good" means is very context dependent
+- But for our purposes
+
+--
+
+- Need to strike a balance
+
+???
+- We need to strike a certain balance with data generation
+
+--
+
+  - Not random enough — miss the bug
+  - Too random — miss the bug
+
+???
+- If the data is not random enough
+- Our state space of possible inputs will be too small
+- And it might miss the bug
+- If the data is too random
+- The state space might be too large
+- And it will be difficult to hit the bug in it
+- So we need to find a state space that's large enough to catch the bug
+- But not too large
+
+--
+
+- For known bugs — realistic data to reduce randomness
+
+???
+- In the specific use case of searching for a known bug 
+- We want the data to be realistic enough as it might help to reduce the randomness of the test
+- While still reproducing what we need from production
+
+--
+
+- Inspect your generators
+
+???
+- To see whether we have a chance of hitting the mark
+- We should inspect our generators and see whether we are generating appropriate data
+
+---
+
+```plaintext
+Summary of behaviors
+33% EmptyList
+33% EmptyOption
+33% AssignRandomRanking
+```
+
+???
+- Here's the distribution of behaviors for our mock
+- Seems reasonable, we are hitting all cases equally
+- No reason to think that we need something else
+
+--
+
+```plaintext
+Summary of job types
+33% FoldProteins
+33% MineCrypto
+33% TrainDeepLearning
+```
+
+???
+- The types of jobs we are using also looks reasonable
+- No reason to skew the distribution
+
+--
+
+```plaintext
+Summary of job providers
+0.011% VjgTRx
+0.011% 08vkYDJOa6
+0.011% sjCnmSOZ
+0.011% MQJ9HLgL
+0.011% P7MMufI6V5
+0.011% BuBHp0mh9A
+...
+```
+
+???
+- The job providers are just random strings
+- Way too many different ones
+- This is clearly unrealistic for the real system
+- And too random, this might be increasing our state space too much
+- Making it less likely to hit the bug
+- We can fix this and make the generator more minimal
+
+---
+
+```scala
+Gen.oneOf("p1", "p2", "p3")
+```
+
+???
+- This is more realistic, we just generate a few fixed names
+- As in reality we don't have that many job providers
+- And this also reduces the randomness of the test
+
+--
+```plaintext
+Summary of job providers
+33% p1
+33% p2
+33% p3
+```
+
+???
+- And now the distribution looks more reasonable
+
+---
+layout: true
+## Are We There Yet?
+---
+
+???
+- With this diversion out of the way
+- Let's try to run our property with the fixed data generation
+--
+
+<pre class="remark-code">
+[info]<span style="color: green"> The security manager</span>
+[info]<span style="color: crimson"> - should not corrupt the sandbox *** FAILED ***</span>
+[info]<span style="color: crimson">     Message: isSandboxCorrupt was true</span>
+[info]<span style="color: crimson">     Occurred when passed generated value</span>
+[info]<span style="color: crimson">List(</span>
+[info]<span style="color: crimson">  List(</span>
+[info]<span style="color: crimson">    (JobBatch(</span>
+[info]<span style="color: crimson">       JobProvider("p3"), List()), EmptyList),</span>
+[info]<span style="color: crimson">    (JobBatch(</span>
+[info]<span style="color: crimson">       JobProvider("p3"), List()), EmptyOption)),</span>
+[info]<span style="color: crimson">  List(</span>
+[info]<span style="color: crimson">     (JobBatch(</span>
+[info]<span style="color: crimson">       JobProvider("p3"), List()), EmptyList)))</span>
+[info]<span style="color: crimson">  // 17 shrinks</span>
+</pre>
+
+???
+- Finally!
+- Our property caught something
+- Not only that it caught something
+- It used shrinking to make this failing case very minimal
+- Only 3 batches, with no jobs
+- And only 2 different behaviors, `EmptyList` and `EmptyOption`
+- With such a minimal reproduction we can actually trace through the code and see what went wrong
+
+---
+layout: true
+## Back to `println` debugging
+---
+
+???
+- So we add some `println`s and rerun the failing example 
+--
+
+.logOnTheLeft[
+```plaintext
+Ranking batches
+Opened sandbox - p3
+Tracing batch - p3
+
+Ranking batches
+Opened sandbox - p3
+Tracing batch - p3
+```
+]
+
+???
+- That's the log we got, presumably it's wrong in some way
+- To make it clearer what went wrong, let's see what a non-failing scenario looks like
+
+--
+
+.logOnTheRight[
+```plaintext
+Ranking batches
+Opened sandbox - p1
+Tracing batch - p1
+Opened sandbox - p2
+Tracing batch - p2
+Closed sandbox - p2
+Tracing batch - p1
+Closed sandbox - p1
+
+Ranking batches
+Opened sandbox - p3
+Tracing batch - p3
+Opened sandbox - p1
+Tracing batch - p1
+Closed sandbox - p1
+Tracing batch - p3
+Closed sandbox - p3
+```
+]
+
+???
+
+- What we see here is that within each list of batches
+- The sandbox for each provider is opened and closed somewhere within the same batch
+- It might not happen immediately, but it happens at some point
+- That's the role of the `SecuritySandboxOptimizer`
+- Because it's costly to open the sandbox, it tries to minimize the number of times it happens within a list
+- That's actually a nice property that we could formulate for the optimizer:
+- Each provider that was opened must be scheduled to be closed at some point
+- Back to our failing example
+- We see that `p3` was opened in the first list, but never closed
+- And then it was opened again in the second list
+- This is exactly what leads to sandbox corruption
+- We are not allowed to open the sandbox twice for the same provider without closing it in-between
+- These rules are dictated by the sandbox API
+- That explains the corruption
+- And also **why the error is non-local**
+- If we forget to close the sandbox for a provider at one point
+- It's only the next time when we get a request from that provider that the corruption will happen
+- That might take time
+- But why didn't we close the sandbox at the end of the first list?
+
+---
+
+layout: true
+## Show Me the Code
+---
+
+???
+- At this point I don't have any choice but to show you some code from the system
+- The code is terrible, there's no way around it
+- Usually I would avoid showing big chunks of code like this
+- But that's part of the point really
+- Terrible code is much more prone to bugs, which is what happened here
+
+--
+
+```
+def secureRunJobs(jobs: List[JobBatch]): Task[Unit] =
+  for
+    rankedBatches <- 
+      foreach(jobs)(securityRanker.predictSecurityLevel)
+        .map(sandboxOptimizer.addPrePost)
+    _ <-
+      foreachDiscard(rankedBatches): rankedBatch =>
+        foreachDiscard(rankedBatch.value.jobs): jobs =>
+          acquireReleaseWith(rankedBatch.pre)(
+             _ => rankedBatch.post): _ =>
+                securityTracer
+                  .rejectUnsafe(
+                    rankedBatch.value.provider,
+                    callback = jobQueue.submit)(jobs)
+
+  yield ()
+```
+
+???
+- This is terrible code
+- **Full of `Unit`s, discarded results, and even a callback**
+- It's as if descriptive types and streaming are not a thing
+- But the structure pretty much matches the diagram we saw earlier
+- Given a list of batches
+
+---
+
+```
+def secureRunJobs(jobs: List[JobBatch]): Task[Unit] =
+  for
+    rankedBatches <- 
+*     foreach(jobs)(securityRanker.predictSecurityLevel)
+*       .map(sandboxOptimizer.addPrePost)
+    _ <-
+      foreachDiscard(rankedBatches): rankedBatch =>
+        foreachDiscard(rankedBatch.value.jobs): jobs =>
+          acquireReleaseWith(rankedBatch.pre)(
+             _ => rankedBatch.post): _ =>
+                securityTracer
+                  .rejectUnsafe(
+                    rankedBatch.value.provider,
+                    callback = jobQueue.submit)(jobs)
+
+  yield ()
+```
+
+???
+- We predict the security level of each job and rank them
+- Then the sandbox optimizer analyzes the batches and decides when to open and close the sandbox
+- By adding pre/post tasks to be called for each batch
+
+---
+
+```
+def secureRunJobs(jobs: List[JobBatch]): Task[Unit] =
+  for
+    rankedBatches <- 
+      foreach(jobs)(securityRanker.predictSecurityLevel)
+        .map(sandboxOptimizer.addPrePost)
+    _ <-
+      foreachDiscard(rankedBatches): rankedBatch =>
+*       foreachDiscard(rankedBatch.value.jobs): jobs =>
+*         acquireReleaseWith(rankedBatch.pre)(
+             _ => rankedBatch.post): _ =>
+                securityTracer
+                  .rejectUnsafe(
+                    rankedBatch.value.provider,
+                    callback = jobQueue.submit)(jobs)
+
+  yield ()
+```
+
+???
+
+- Then we go over the ranked batches
+- Open up the sandbox
+
+---
+
+```
+def secureRunJobs(jobs: List[JobBatch]): Task[Unit] =
+  for
+    rankedBatches <- 
+      foreach(jobs)(securityRanker.predictSecurityLevel)
+        .map(sandboxOptimizer.addPrePost)
+    _ <-
+      foreachDiscard(rankedBatches): rankedBatch =>
+        foreachDiscard(rankedBatch.value.jobs): jobs =>
+          acquireReleaseWith(rankedBatch.pre)(
+             _ => rankedBatch.post): _ =>
+*               securityTracer
+*                 .rejectUnsafe(
+*                   rankedBatch.value.provider,
+*                   callback = jobQueue.submit)(jobs)
+
+  yield ()
+```
+
+???
+- And do the security-trace, which rejects unsafe jobs
+- Then use a callback to submit jobs that passed to the safety check
+- So what went wrong?
+- Seemed like we should be safe acquiring and releasing the sandbox
+
+---
+
+```
+def secureRunJobs(jobs: List[JobBatch]): Task[Unit] =
+  for
+    rankedBatches <- 
+      foreach(jobs)(securityRanker.predictSecurityLevel)
+        .map(sandboxOptimizer.addPrePost)
+    _ <-
+      foreachDiscard(rankedBatches): rankedBatch =>
+        foreachDiscard(rankedBatch.value.jobs): jobs =>
+*         acquireReleaseWith(rankedBatch.pre)(
+*            _ => rankedBatch.post): _ =>
+                securityTracer
+                  .rejectUnsafe(
+                    rankedBatch.value.provider,
+                    callback = jobQueue.submit)(jobs)
+
+  yield ()
+```
+
+???
+- As we see here
+- But this is misleading
+- Since the sandbox optimizer actually split up the opening and closing into possibly separate phases
+- We might have opened the sandbox in one batch, but were supposed to close it in another
+- So why did we miss closing the sandbox?
+- In the logs we saw that the relevant behaviors were the `EmptyList` and `EmptyOption`
+- The `EmptyList` part doesn't seem to be the problem since it happens within the `acquireRelease` block
+
+---
+
+```
+def secureRunJobs(jobs: List[JobBatch]): Task[Unit] =
+  for
+    rankedBatches <- 
+      foreach(jobs)(securityRanker.predictSecurityLevel)
+        .map(sandboxOptimizer.addPrePost)
+    _ <-
+      foreachDiscard(rankedBatches): rankedBatch =>
+        foreachDiscard(rankedBatch.value.jobs): jobs =>
+          acquireReleaseWith(rankedBatch.pre)(
+             _ => rankedBatch.post): _ =>
+                securityTracer
+                  .rejectUnsafe(
+                    rankedBatch.value.provider,
+*                   callback = jobQueue.submit)(jobs)
+
+  yield ()
+```
+
+???
+- Here
+- But where did that `Option` go?
+- It might be easy to miss
+
+---
+
+```
+def secureRunJobs(jobs: List[JobBatch]): Task[Unit] =
+  for
+    rankedBatches <- 
+      foreach(jobs)(securityRanker.predictSecurityLevel)
+        .map(sandboxOptimizer.addPrePost)
+    _ <-
+      foreachDiscard(rankedBatches): rankedBatch =>
+*       foreachDiscard(rankedBatch.value.jobs): jobs =>
+          acquireReleaseWith(rankedBatch.pre)(
+             _ => rankedBatch.post): _ =>
+                securityTracer
+                  .rejectUnsafe(
+                    rankedBatch.value.provider,
+                    callback = jobQueue.submit)(jobs)
+
+  yield ()
+```
+
+???
+- It sits here
+- We only perform the required side-effect, like closing the sandobx
+- If that `Option` is present
+- This is sometimes a problem with **very polymorphic functions when mixed with the `Unit`** return type
+- They don't necessarily make it obvious that something different is happening here
+- And seeing how many different `List`s we have in this code it's easy to miss
+- So what happens in our problematic scenario?
+
+---
+
+```
+List(
+  List(
+    (JobBatch(JobProvider("p3"), List()), EmptyList),
+    (JobBatch(JobProvider("p3"), List()), EmptyOption)),
+    
+  List((JobBatch(JobProvider("p3"), List()), EmptyList)))
+```
+
+???
+- In the first input
+- The sandbox optimizer sees that the provider `p3` is used across two batches
+- It determines that we can open the sandbox for `p3` only once at the beginning
+- And then close it at the second batch here
+- But then  behavior of the security-ranker determines that we are going to return `None` for the second batch
+- Which means that the action for this second batch won't be performed at all
+- So we skipped closing the sandbox here
+- Then we get the second input which tries to open the sandbox for `p3` again
+- And that's when we get the corruption
+- This is a bad interaction between two components, the ranker and the optimizer
+- We had a naive way to optimize that didn't take into account the behavior of the ranker
+- With such obfuscated code, where everything is `Unit`, it's an easy mistake to make
+- How do we fix this?
+- We might first wonder where did that `Option` come from to begin with?
+---
+
+```
+def predictSecurityLevel(
+  jobBatch: JobBatch): UIO[RankedBatch] =
+  
+  succeedBlocking:
+    val ranking = 
+      Try(rankLegacy(jobBatch.jobs)).toOption
+
+    RankedBatch(jobBatch.provider, ranking)
+```
+
+???
+- That's the function that does the prediction
+- It appears that `predictSecurityLevel` is a leftover from integration with legacy code
+- We call `rankLegacy` and then wrap it all up with a `Try` and a ZIO type
+- But we also swallow any exceptions with `toOption`
+- Swallowing exceptions without any evidence is never a good idea
+- So we might as well integrate the exception into our effect
+- And avoid the `Option` altogether
+
+---
+layout: true
+
+## The Fix
+
+---
+
+```
+predictSecurityLevel: JobBatch => Task[RankedBatch]
+```
+
+???
+- So here's the new signature of `predictSecurityLevel`
+- It's no longer a non-failing effect
+- It can fail producing ranking, which is reflected in the `Task` type here
+--
+
+```
+case class RankedBatch(provider: JobProvider,
+                       values: List[RankedJob])
+```
+
+???
+- But now the `RankedBatch` type no longer contains an `Option`
+- With that in place, we will never skip opening/closing the sandbox
+- And we can re-run our property
+--
+
+<pre class="remark-code">
+[info]<span style="color: green"> The security manager</span>
+[info]<span style="color: green"> - should not corrupt the sandbox</span>
+[info]<span style="color: green"> All tests passed.</span>
+</pre>
+
+???
+- Success!
+- Now the green is for real
+- The non-corruption property that we defined for our code seems to be holding
+
+---
+layout: true
+
+## Or Is It?
+
+---
+
+???
+- But there are still some issues left
+--
+
+- We only "verified" the mocked system
+- Why did that `None` occur?
+- What the Java 6/7 upgrade had to do with it?
+
+???
+- The verification is process is of course random
+- So we might be missing something
+- But also, this was done with the mock
+- We don't really know whether the real system is fully okay now
+- As the property never caught the bug there
+- We also didn't find out why that `None` happened in the first place
+- And what does the Java update has to do with anything?
+--
+
+<br />
+```
+def rankLegacy(
+  jobBatch: List[Job]): List[RankedJob] =
+  
+  jobBatch
+    .map(assignSecurityRating)
+    .filterNot(_.securityRating >= SecurityRating.Shady)
+    .sorted
+```
+
+???
+- This is the legacy function that's wrapped in a `Try`
+- The obvious candidate for failure here is `assignSecurityRating`
+- Which does some complicated data-sciencey stuff
+- As a mere security team, we don't want to mess around with data-science
+- At least we no longer swallow exceptions
+- So we might get some more insight if the exception is thrown again in production
+- And the sandbox should be safe in the meantime
+
+---
+
+layout: false
+class: middle, transition
+
+> ... when a mysterious woman moved into town and began renting an old, abandoned property.  
+After a series of strange occurrences, the local police investigate and find that the woman had been using property-based testing to manipulate the town's fate.
+
+
+.footnote[GPT-3 on "The Property-based Testing Twist of Fate"]
+
+???
+- So we deploy our fix to production
+- Hoping for the best
+
+---
+layout: true
+
+## Meanwhile in Production...
+
+---
+
+- No `SecuritySandboxIsCorrupt` exceptions!
+
+???
+- And it works
+- We no longer get `SecuritySandboxIsCorrupt` exception
+- Which is great
+
+--
+
+- `IllegalArgumentException`s instead...
+
+???
+- But now we started getting the occasional `IllegalArgumentException` 
+- That weren't there before
+--
+
+  - "Comparison method violates its general contract!"
+  
+- What?!
+
+???
+- With "comparison method violates its general contract" message
+- With an exclamation mark, no less
+- What on earth is that?
+- And since when is **Java so excited about exceptions**?
+- But at least we now have an exception, so we can see where it throws
+
+--
+
+```
+jobBatch
+  .map(assignSecurityRating)
+  .filterNot(_.securityRating >= SecurityRating.Shady)
+* .sorted
+
+```  
+???
+- Of all things it could've failed on
+- It failed on sorting?
+- Since when sorting throws exceptions?
+- We're now back to our old hammer of `println` debugging
+---
+
+class: sortFailingFromProduction
+
+```
+List(
+  RankedJob(FoldProteins(CPU(580), RAM(60)), Unsafe(21)),
+  RankedJob(MineCrypto(CPU(59), RAM(503)), Safe),
+  RankedJob(MineCrypto(CPU(131), RAM(352)), Shady),
+  RankedJob(MineCrypto(CPU(270), RAM(170)), Shady),
+  RankedJob(MineCrypto(CPU(39), RAM(13)), Safe),
+  RankedJob(FoldProteins(CPU(894), RAM(719)), Safe),
+  RankedJob(TrainDeepLearning(CPU(81), RAM(510)), Shady),
+  RankedJob(MineCrypto(CPU(414), RAM(985)), Safe),
+  RankedJob(TrainDeepLearning(CPU(904), RAM(342)), Safe),
+  RankedJob(FoldProteins(CPU(768), RAM(933)), Unsafe(19)),
+  RankedJob(TrainDeepLearning(CPU(983), RAM(565)), Questionable),
+  RankedJob(MineCrypto(CPU(412), RAM(219)), Shady),
+  RankedJob(TrainDeepLearning(CPU(258), RAM(452)), Questionable),
+  RankedJob(MineCrypto(CPU(513), RAM(700)), Questionable),
+  RankedJob(TrainDeepLearning(CPU(720), RAM(823)), Questionable),
+  RankedJob(TrainDeepLearning(CPU(469), RAM(662)), Safe),
+  RankedJob(MineCrypto(CPU(72), RAM(284)), Shady),
+  RankedJob(FoldProteins(CPU(818), RAM(286)), Questionable),
+  RankedJob(MineCrypto(CPU(304), RAM(548)), Safe),
+  RankedJob(TrainDeepLearning(CPU(298), RAM(960)), Questionable),
+  RankedJob(FoldProteins(CPU(393), RAM(157)), Unsafe(21)),
+  RankedJob(MineCrypto(CPU(889), RAM(873)), Safe),
+  RankedJob(FoldProteins(CPU(433), RAM(365)), Safe),
+  RankedJob(FoldProteins(CPU(824), RAM(763)), Shady),
+  RankedJob(TrainDeepLearning(CPU(618), RAM(324)), Shady),
+  RankedJob(FoldProteins(CPU(804), RAM(56)), Questionable),
+  RankedJob(FoldProteins(CPU(217), RAM(46)), Unsafe(2)),
+  RankedJob(TrainDeepLearning(CPU(501), RAM(986)), Unsafe(67)),
+  RankedJob(TrainDeepLearning(CPU(430), RAM(532)), Questionable),
+  RankedJob(FoldProteins(CPU(537), RAM(757)), Shady),
+  RankedJob(FoldProteins(CPU(447), RAM(103)), Questionable),
+  RankedJob(TrainDeepLearning(CPU(536), RAM(670)), Unsafe(3)),
+  RankedJob(TrainDeepLearning(CPU(109), RAM(504)), Unsafe(1)),
+  RankedJob(FoldProteins(CPU(153), RAM(712)), Questionable),
+  RankedJob(MineCrypto(CPU(306), RAM(386)), Shady))
+```
+
+???
+- That's the input it throws on
+- Not much we can learn from it
+- Looks pretty random
+- But!
+- We have property-based testing
+- We can shrink this to something more comprehensible
+- Now that we know where to aim
+- We can write a new property
+
+---
+layout: true
+
+## Same Same
+---
+
+```
+"Sorting" should:
+  "not throw exceptions" in:
+    forAll: (jobs: List[RankedJob]) =>
+      noException should be thrownBy:
+        jobs.sorted
+```
+???
+- A pretty basic requirement
+- We want sorting to not throw exceptions at us
+- So we generate lots of random lists and sort them
+- This property is a bit stubborn, and requires lots of runs
+- But with the right configuration we get it
+- A failure 
+
+---
+layout: true
+
+## But Different
+
+---
+
+class: sortFailingFromProperty
+
+<pre class="remark-code">
+[info]<span style="color: green"> Sorting</span>
+[info]<span style="color: crimson"> - should not throw exceptions *** FAILED ***</span>
+[info]<span style="color: crimson">     Message: An unexpected java.lang.IllegalArgumentException was thrown.</span>
+[info]<span style="color: crimson">     Occurred when passed generated values </span>
+[info]<span style="color: crimson">         List(</span>
+[info]<span style="color: crimson">           RankedJob(TrainDeepLearning(CPU(0), RAM(0)), Safe),</span>
+[info]<span style="color: crimson">           RankedJob(MineCrypto(CPU(0), RAM(0)), Safe),</span>
+[info]<span style="color: crimson">           RankedJob(TrainDeepLearning(CPU(0), RAM(0)), Unsafe(0)),</span>
+[info]<span style="color: crimson">           RankedJob(FoldProteins(CPU(0), RAM(0)), Safe),</span>
+[info]<span style="color: crimson">           RankedJob(FoldProteins(CPU(0), RAM(0)), Safe),</span>
+[info]<span style="color: crimson">           RankedJob(FoldProteins(CPU(0), RAM(0)), Unsafe(92)),</span>
+[info]<span style="color: crimson">           RankedJob(MineCrypto(CPU(0), RAM(0)), Safe),</span>
+[info]<span style="color: crimson">           RankedJob(MineCrypto(CPU(0), RAM(0)), Safe),</span>
+[info]<span style="color: crimson">           RankedJob(MineCrypto(CPU(0), RAM(0)), Safe),</span>
+[info]<span style="color: crimson">           RankedJob(FoldProteins(CPU(0), RAM(0)), Safe),</span>
+[info]<span style="color: crimson">           RankedJob(MineCrypto(CPU(0), RAM(0)), Safe),</span>
+[info]<span style="color: crimson">           RankedJob(FoldProteins(CPU(0), RAM(0)), Safe),</span>
+[info]<span style="color: crimson">           RankedJob(FoldProteins(CPU(0), RAM(0)), Questionable),</span>
+[info]<span style="color: crimson">           RankedJob(MineCrypto(CPU(0), RAM(0)), Safe),</span>
+[info]<span style="color: crimson">           RankedJob(MineCrypto(CPU(0), RAM(0)), Safe),</span>
+[info]<span style="color: crimson">           RankedJob(MineCrypto(CPU(0), RAM(0)), Safe),</span>
+[info]<span style="color: crimson">           RankedJob(MineCrypto(CPU(0), RAM(0)), Safe),</span>
+[info]<span style="color: crimson">           RankedJob(FoldProteins(CPU(0), RAM(0)), Questionable),</span>
+[info]<span style="color: crimson">           RankedJob(MineCrypto(CPU(0), RAM(0)), Shady),</span>
+[info]<span style="color: crimson">           RankedJob(TrainDeepLearning(CPU(0), RAM(0)), Safe),</span>
+[info]<span style="color: crimson">           RankedJob(FoldProteins(CPU(0), RAM(0)), Questionable),</span>
+[info]<span style="color: crimson">           RankedJob(MineCrypto(CPU(0), RAM(0)), Safe),</span>
+[info]<span style="color: crimson">           RankedJob(TrainDeepLearning(CPU(0), RAM(0)), Shady),</span>
+[info]<span style="color: crimson">           RankedJob(FoldProteins(CPU(0), RAM(0)), Unsafe(92)),</span>
+[info]<span style="color: crimson">           RankedJob(FoldProteins(CPU(0), RAM(0)), Safe),</span>
+[info]<span style="color: crimson">           RankedJob(FoldProteins(CPU(0), RAM(0)), Safe),</span>
+[info]<span style="color: crimson">           RankedJob(FoldProteins(CPU(0), RAM(0)), Questionable),</span>
+[info]<span style="color: crimson">           RankedJob(MineCrypto(CPU(0), RAM(0)), Shady),</span>
+[info]<span style="color: crimson">           RankedJob(TrainDeepLearning(CPU(0), RAM(0)), Safe),</span>
+[info]<span style="color: crimson">           RankedJob(FoldProteins(CPU(0), RAM(0)), Questionable),</span>
+[info]<span style="color: crimson">           RankedJob(MineCrypto(CPU(0), RAM(0)), Safe),</span>
+[info]<span style="color: crimson">           RankedJob(FoldProteins(CPU(0), RAM(0)), Safe)</span>
+[info]<span style="color: crimson">         ) // 707 shrinks</span>
+</pre>
+
+???
+- Where did our minimization go?
+- It's not like it didn't try
+- It attempted more than seven hundred shrinks in this case
+- Also, suspiciously all the lists it fails on are somehow of length 32
+- Can't be a coincidence, but no idea what it means
+- But we no longer have to debug mysterious properties and generators
+- We have a stack-trace
+- Let's use it to dig into the actual problem
+
+---
+
+layout: true
+## What are Stack Traces For?
+---
+
+class: javaSort
+
+```java
+   ...
+        } while (count1 >= MIN_GALLOP | count2 >= MIN_GALLOP);
+        if (minGallop < 0)
+            minGallop = 0;
+        minGallop += 2;  // Penalize for leaving gallop mode
+    }  // End of "outer" loop
+    this.minGallop = minGallop < 1 ? 1 : minGallop;  // Write back to field
+
+    if (len1 == 1) {
+        assert len2 > 0;
+        System.arraycopy(a, cursor2, a, dest, len2);
+        a[dest + len2] = tmp[cursor1]; //  Last elt of run 1 to end of merge
+    } else if (len1 == 0) {
+*       throw new IllegalArgumentException(
+*               "Comparison method violates its general contract!");
+    } else {
+        assert len2 == 0;
+        assert len1 > 1;
+        System.arraycopy(tmp, cursor1, a, dest, len1);
+    }
+}
+```
+
+???
+- That's the relevant sorting code
+- And it throws here
+- I'm not as fluent in Java as I used to be
+- But that's some seriously impenetrable code
+- What's a "**gallop**"?..
+- And it goes on like that for a while
+--
+
+Not for this...
+
+???
+- No way we'll figure this out just by staring at it
+- So the stack trace is not all that helpful
+
+---
+layout: true
+
+## RTFM
+---
+
+???
+- But it's the JDK
+- Unpleasant as it may be, we can just read the documentation
+--
+
+```java
+ ...
+ * @throws IllegalArgumentException (optional) if the
+ *         natural ordering of the array elements is 
+ *         found to violate the Comparable contract
+ */
+public static void sort(Object[] a) {
+```
+
+???
+- Apparently `sort` is allowed to throw when the `Comparable` that was passed to it violates its contract
+- It might be an interesting discussion whether throwing is the right decision here
+- But we'll move on to the documentation of `Comparator` 
+---
+
+- The implementor must ensure that  
+`sgn(compare(x, y)) == -sgn(compare(y, x))`   
+for all `x` and `y`.
+
+???
+- Here's the contract we are supposedly violating
+- Surprising to see it in Java
+- We have a property that the `compare` function must obey
+- In this case something to do with flipping arguments and sign inversion
+- Java is literally telling us which property we need to test
+- And there are a couple more
+--
+
+- The implementor must also ensure that the relation is transitive:  
+`(compare(x, y)>0) && (compare(y, z)>0)`  
+implies `compare(x, z)>0`.
+
+- Finally, the implementor must ensure that `compare(x, y)==0` implies that   
+`sgn(compare(x, z))==sgn(compare(y, z))`  
+for all `z`.
+
+???
+- This looks a lots like something straight out of Scalaz or Cats
+- And these libraries actually provide these properties for us
+- But we can write them out ourselves
+- Translating the documentation into code is fairly straightforward
+
+---
+layout: true
+
+## Back to Business
+---
+
+```
+"The ranked job ordering" should:
+  "respect inversion" in:
+    forAll: (x: RankedJob, y: RankedJob) =>
+      assert:
+        signum(compare(x, y)) == -signum(compare(y, x))
+{{content}}
+```
+
+???
+- Here's the first property
+- It's just straightforward translation of the Javadoc we saw before
+- And with a bit of trickery we can spell out the other properties as well
+--
+
+  "be transitive" in:
+    forAll:  
+      (x: RankedJob, y: RankedJob, z: RankedJob) =>
+        List(x, y, z).permutations.foreach:
+          case List(x, y, z) =>
+            if (x > y && y > z) assert(x > z)
+
+  "preserve sign on equality" in:
+    forAll (x: RankedJob, y: RankedJob, z: RankedJob) =>
+      whenever(compare(x, y) == 0):
+        assert:
+          signum(compare(x, z)) == signum(compare(y, z))
+
+???
+- We can now run these
+---
+
+<pre class="remark-code">
+[info]<span style="color: green"> The ranked job ordering</span>
+[info]<span style="color: crimson"> - should respect inversion *** FAILED ***</span>
+[info]<span style="color: crimson">     Message: 1 did not equal -1</span>
+[info]<span style="color: crimson">     Occurred when passed generated values (</span>
+[info]<span style="color: crimson">       arg0 = </span>
+[info]<span style="color: crimson">         RankedJob(FoldProteins(CPU(0),RAM(0)),Shady),</span>
+[info]<span style="color: crimson">         // 9 shrinks</span>
+[info]<span style="color: crimson">       arg1 = </span>
+[info]<span style="color: crimson">         RankedJob(FoldProteins(CPU(0),RAM(0)),Shady),</span>
+[info]<span style="color: crimson">         // 18 shrinks</span>
+[info]<span style="color: crimson">     )</span>
+[info]<span style="color: green"> - should be transitive</span>
+[info]<span style="color: green"> - should preserve sign on equality</span>
+</pre>
+
+???
+- Lovely
+- We are violating the first property
+- The one where we flip the arguments and the sign of the comparison should flip as well
+- And we got a very minimal example to help us reproduce this
+- If we run the test multiple times
+- We see that it's always comparing two `FoldProteins` jobs with the same security rating
+- Now we can finally pinpoint our bug
+
+---
+
+layout: true
+## Found It!
+---
+
+```
+// Order by security rating.
+// On equality, prefer protein folding too all other 
+// job types. We want to give back!
+implicit val ordering: Ordering[RankedJob] =
+{{content}}
+```
+
+???
+- That's the `Ordering` that we are using for `RankedJob`s
+- We even have a comment explaining what it should be doing
+- We order by security rating
+- But as tie breaker we prefer the protein folding jobs
+- We really do want to give back to the world
+- **It's in our DNA...**
+- **It's also a business requirement**
+
+--
+  Ordering
+    .by((_: RankedJob).securityRating)
+{{content}}
+
+???
+- So we start ordering by the security rating
+- And if that's equal
+--
+    .orElse: (job1, job2) =>
+      (job1.value, job2.value) match
+        case (_: FoldProteins, _) => 1
+        case (_, _: FoldProteins) => -1
+        case _ => 0
+    
+???
+- We look at the job type
+- If the first one is `FoldProteins` then it wins
+- If the second one is `FoldProteins` then it wins as well
+- Otherwise it's a tie
+- We implemented the requirement in the comment
+- See the bug?
+- If both jobs are `FoldProteins` then you get `1`
+- But then if you flip the order of the arguments, you still get `1`
+- We broke sign inversion, which required the result to be `-1`
+- The fix is easy
+
+---
+
+```
+// Order by security rating.
+// On equality, prefer protein folding too all other 
+// job types. We want to give back!
+implicit val ordering: Ordering[RankedJob] =
+  Ordering
+    .by((_: RankedJob).securityRating)
+    .orElse: (job1, job2) =>
+      (job1.value, job2.value) match
+*       case (_: FoldProteins, _: FoldProteins) => 0
+        case (_: FoldProteins, _) => 1
+        case (_, _: FoldProteins) => -1
+        case _ => 0
+```
+
+???
+- If both arguments are `FoldProteins` it's a 0
+- So flipping the sign on 0 is still a 0
+- And that's it
+- We can run our properties again
+
+---
+
+<pre class="remark-code">
+[info]<span style="color: green"> Sorting</span>
+[info]<span style="color: green"> - should not throw exceptions</span>
+[info]<span style="color: green"> The ranked job ordering</span>
+[info]<span style="color: green"> - should respect inversion</span>
+[info]<span style="color: green"> - should be transitive</span>
+[info]<span style="color: green"> - should preserve sign on equality</span>
+[info]<span style="color: green"> All tests passed.</span>
+</pre>
+
+???
+- Finally!
+- This fully resolves the original bug
+- The exception won't be thrown any more
+- Let's recap the full bug
+
+
+---
+layout: false
+## How It All Went Down
+
+1. A bug in an `Ordering` instance
+
+???
+- We statred out with a buggy `Ordering` instance
+--
+
+1. Triggers a rare exception in `Array.sort`
+
+???
+- This sometimes triggers an exception in `sort`
+- But only on relatively long lists, so it's rare
+- `TimSort`, which is what is used by Java
+- Works in chunks of 32
+- So that explains why the minimal examples were always at 32
+--
+1. Behavior changed between Java 6 and 7
+
+???
+- The exception throwing behavior is something that was introduced in Java 7
+- This explains why the bug started popping up only after the upgrade
+
+--
+
+1. Exception swallowing in legacy code
+
+???
+- We had poor integration with some legacy code
+- Where instead of using proper exception handling, we silently swallowed exceptions
+
+--
+
+1. Imperative, `Unit`-driven code
+
+???
+- This was hidden in very imperative code
+- That additionally was poorly typed
+- `Unit` being a particular culprit here
+
+--
+
+1. Confusing, multi-level batching
+
+???
+- With more layers of obfuscation due confusing batching
+- Too bad we didn't use streaming
+- It's as if someone tried to obfuscate the code on purpose
+
+--
+
+1. Naive resource optimization
+
+???
+- And then we applied a rather naive resource optimization strategy
+- Which got lost in all that badly written code
+--
+
+1. <span style="color: crimson">Boom!</span>
+
+???
+- And the result was this longwinded bug we finally figured out 
+- With the aid of property-based testing
+- But it's no wonder it was so difficult to nail down
+- The circumstances for the bug require some very specific, and long, inputs 
+- Which are difficult to randomize
+- On different levels of the code
+
+---
+
+## To Conclude
+
+1. Property-based testing can be a useful debugging tool
+
+???
+
+- So we can conclude now
+- We used property-based testing as a very powerful debugging tool
+- All the pillars of property-based testing were present here
+- We had some simple properties defined for our system
+- We used randomization to explore the state-space and reproduce the bugs
+- And shrinking helped us minimize them
+- Making it much easier to actually figure out the mechanics of what went wrong
+--
+
+1. On **real** production systems
+
+???
+- I hope this case study illustrated the point that this tool is powerful enough to be used on **real** production systems.
+
+--
+
+1. With some finesse
+
+???
+- But nothing is magical
+- Getting property-based testing to work for us took some finesse and fine-tuning
+- Which is something that requires practice
+
+--
+
+1. Not just math and `reverse`
+
+???
+- But this should serve to show that property-based testing can be useful outside the realm of toy examples and math-y code
+
+--
+1. But even Java sometimes throws math at you
+
+???
+- As a final twist, it appears that sometimes even Java can throw mathematical properties at you
+- So we got to use properties in the more classical setting
+- And this concludes our case study
+- One more thing though
+
+---
+
+## Post Scriptum
+
+- The data-science team analyzed some data
+
+???
+- After we deployed the fix
+- The data-science team analyzed some data
+- As they tend to do
+- And came to a surprising conclusion
+
+--
+
+- Apparently the broken sorting is more profitable
+
+???
+- Strangely, the broken sorting was more profitable for our company
+- Go figure
+- Luckily, Java's got our back
+
+--
+
+- `-Djava.util.Arrays.useLegacyMergeSort=true`
+
+???
+- We can revert to the old sorting algorithm with a flag
+- Could've avoided that whole bug in the first place...
+
+---
+
+class: middle, transition
+
+> Alice: what was that great quote about property-based testing? 
+>   
+> Bob: I'm not sure, but I think it was from John Hughes.
+
+.footnote[GPT-3]
+
+.githubLink.centered[
+https://github.com/ncreep/fixing-prod-with-pbt
+]
+
+.questions.centered[Questions?]
+
+???
+- You can find the full presentation and sample code here
+- Thank you
+
+
+</textarea>
+<script	src="remark-0.14.0.min.js"></script>
+
+<!-- For Scala 3 highlighting support -->
+<link rel="stylesheet" href="highlight.11.7.0.magula.min.css">
+<script src="highlight.11.7.0.min.js"></script>
+<script src="highlight.11.7.0.scala.min.js"></script>
+
+<script>
+// overriding the built-in highlighter with the newer version
+remark.highlighter.engine = hljs;
+</script>
+
+<script type="text/javascript">
+  var slideshow = remark.create({
+	countIncrementalSlides: false,
+  highlightLines: true,
+	highlightLanguage: 'scala',
+	highlightStyle: 'magula' // default, googlecode, magula, vs
+});
+</script>
+</body>
+</html>
