@@ -626,7 +626,7 @@ class SecurityManager(
 - In a way, we are creating a partial model of the real system with mocks
 - This is where things become more speculative
 - We need to choose which components to mock, and which to keep
-- If we mock too much, the bug might disappear
+- If we **mock too much**, the bug might disappear
 - By making some educated guesses we might find the right components to mock
 - Let's start from the end
 - The `JobQueue` doesn't interact with the sandbox so we can ignore it for now
@@ -647,7 +647,7 @@ trait SecuritySandboxOptimizer:
 - But it's essentially a complicated pure function
 - Itself a good candidate for property-based testing
 - So unless we reproduce its logic as a mock
-- The mock is likely to end up either trivial, or wrong, and introducing its own bugs
+- The mock is likely to end up either **trivial, or wrong**, and introducing its own bugs
 - That leaves us with the `SecurityRanker`
 
 --
@@ -662,7 +662,7 @@ trait SecurityRanker:
 - We can choose to mock this out
 - It's a good candidate for mocking, as its behavior is pretty-much a black-box for us
 - And we can come up with a nice model of how it **should** work
-- We'll follow the types to guide our mock's behavior
+- We'll **follow the types** to guide our mock's behavior
 
 ---
 ```
@@ -698,9 +698,9 @@ enum Behavior:
 - Either an empty `Option` for a result
 - Or an empty `List`
 - In the third case, we need to assign some security rankings
-- We'll do it by randomizing some security ratings
-- Hopefully this model is rich enough to expose the bug
-- But with a sufficiently smaller state space than the original code
+- We'll do it by randomizing some rankings
+- Hopefully this model is **rich enough** to expose the bug
+- But with a sufficiently **smaller state space** than the original code
 - Which would lead to a higher chance to reveal the bug
 - So in the mock we'll randomly generate some behaviors and return the appropriate results
 
@@ -1102,7 +1102,7 @@ def secureRunJobs(jobs: List[JobBatch]): Task[Unit] =
 
 ???
 - And do the security-trace, which rejects unsafe jobs
-- Then use a callback to submit jobs that passed to the safety check
+- Then use a callback to submit jobs that passed the safety check
 - So what went wrong?
 - Seemed like we should be safe acquiring and releasing the sandbox
 
@@ -1213,7 +1213,7 @@ List(
 - So we skipped closing the sandbox here
 - Then we get the second input which tries to open the sandbox for `p3` again
 - And that's when we get the corruption
-- This is a bad interaction between two components, the ranker and the optimizer
+- This is a **bad interaction between two components**, the ranker and the optimizer
 - We had a naive way to optimize that didn't take into account the behavior of the ranker
 - With such obfuscated code, where everything is `Unit`, it's an easy mistake to make
 - How do we fix this?
@@ -1234,7 +1234,7 @@ def predictSecurityLevel(
 ???
 - That's the function that does the prediction
 - It appears that `predictSecurityLevel` is a leftover from integration with legacy code
-- We call `rankLegacy` and then wrap it all up with a `Try` and a ZIO type
+- We call `rankLegacy` and then wrap it all up with a `Try` and a effect type
 - But we also swallow any exceptions with `toOption`
 - Swallowing exceptions without any evidence is never a good idea
 - So we might as well integrate the exception into our effect
@@ -1319,7 +1319,7 @@ def rankLegacy(
 - This is the legacy function that's wrapped in a `Try`
 - The obvious candidate for failure here is `assignSecurityRating`
 - Which does some complicated data-sciencey stuff
-- As a mere security team, we don't want to mess around with data-science
+- As **a mere security team**, we don't want to mess around with data-science
 - At least we no longer swallow exceptions
 - So we might get some more insight if the exception is thrown again in production
 - And the sandbox should be safe in the meantime
